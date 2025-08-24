@@ -1,0 +1,463 @@
+#!/usr/bin/env bash
+
+function edit {
+  sudo subl /etc/nixos/configuration.nix
+}
+
+function rebuild_switch {
+  sudo nixos-rebuild switch
+}
+
+function add {
+  if [[ $# -eq 0 ]]; then
+    echo "Error: No packages specified. Usage: nx add <package1> [package2] ..."
+    exit 1
+  fi
+  
+  local config_file="/etc/nixos/configuration.nix"
+  local temp_file="/tmp/configuration.nix.tmp"
+  
+  echo "Adding packages: $*"
+  
+  # Check if configuration file exists
+  if [[ ! -f "$config_file" ]]; then
+    echo "Error: Configuration file not found at $config_file"
+    exit 1
+  fi
+  
+  # Read the configuration file and process it
+  local in_packages_section=false
+  local packages_start_line=0
+  local packages_end_line=0
+  local line_num=0
+  
+  # First pass: find the packages section boundaries
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    # Look for the start of packages section (simplified pattern)
+    if [[ "$line" =~ ^[[:space:]]*packages[[:space:]]*=[[:space:]]*with[[:space:]]*pkgs ]]; then
+      in_packages_section=true
+      packages_start_line=$line_num
+    fi
+    
+    # Look for the end of packages section (closing bracket)
+    if [[ "$in_packages_section" == true && "$line" =~ ^[[:space:]]*\] ]]; then
+      packages_end_line=$line_num
+      break
+    fi
+  done < "$config_file"
+  
+  if [[ $packages_start_line -eq 0 ]]; then
+    echo "Error: Could not find packages section in configuration.nix"
+    exit 1
+  fi
+  
+  # Extract existing packages
+  local existing_packages=()
+  local line_num=0
+  
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    if [[ $line_num -gt $packages_start_line && $line_num -lt $packages_end_line ]]; then
+      # Extract package names from lines like "    gnome-boxes" or "    gnomeExtensions.auto-move-windows # comment"
+      if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_.-]+) ]]; then
+        local package_name="${BASH_REMATCH[1]}"
+        existing_packages+=("$package_name")
+      fi
+    fi
+  done < "$config_file"
+  
+  # Add new packages to the list
+  local added_count=0
+  for package in "$@"; do
+    # Check if package is already in the list
+    local already_exists=false
+    for existing in "${existing_packages[@]}"; do
+      if [[ "$existing" == "$package" ]]; then
+        already_exists=true
+        break
+      fi
+    done
+    
+    if [[ "$already_exists" == false ]]; then
+      existing_packages+=("$package")
+      ((added_count++))
+    fi
+  done
+  
+  if [[ $added_count -gt 0 ]]; then
+    echo "Adding $added_count new package(s)..."
+  else
+    echo "All packages already exist in configuration"
+    exit 0
+  fi
+  
+  # Sort packages alphabetically
+  IFS=$'\n' sorted_packages=($(sort <<<"${existing_packages[*]}"))
+  unset IFS
+  
+  # Create updated configuration
+  local line_num=0
+  local in_packages_section=false
+  
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    if [[ $line_num -eq $packages_start_line ]]; then
+      # Write the packages section start
+      echo "$line" >> "$temp_file"
+      
+      # Write all packages
+      for package in "${sorted_packages[@]}"; do
+        echo "    $package" >> "$temp_file"
+      done
+      
+      in_packages_section=true
+    elif [[ $line_num -gt $packages_start_line && $line_num -lt $packages_end_line ]]; then
+      # Skip lines in the packages section (we've already written them)
+      continue
+    elif [[ $line_num -eq $packages_end_line ]]; then
+      # Write the packages section end
+      echo "$line" >> "$temp_file"
+      in_packages_section=false
+    else
+      # Write all other lines unchanged
+      echo "$line" >> "$temp_file"
+    fi
+  done < "$config_file"
+  
+  # Backup original configuration
+  local backup_file="/etc/nixos/configuration.nix.backup.$(date +%Y%m%d_%H%M%S)"
+  if sudo cp "$config_file" "$backup_file"; then
+    echo "Backup created"
+  else
+    echo "Warning: Failed to create backup"
+  fi
+  
+  # Replace original with updated configuration
+  if sudo cp "$temp_file" "$config_file"; then
+    echo "Configuration updated successfully!"
+    echo "Run 'nx rs' to rebuild and switch"
+  else
+    echo "Error: Failed to update configuration file"
+    exit 1
+  fi
+  
+  # Clean up temp file
+  rm -f "$temp_file"
+}
+
+function save {
+  echo "Saving NixOS configuration..."
+  
+  # Create destination directory if it doesn't exist
+  mkdir -p /home/daytonn/Development/nixos
+  
+  # Copy the NixOS configuration file
+  if cp /etc/nixos/configuration.nix /home/daytonn/Development/nixos/; then
+    echo "Successfully copied configuration.nix to /home/daytonn/Development/nixos/"
+  else
+    echo "Error: Failed to copy configuration.nix"
+    exit 1
+  fi
+  
+  # Change to the nixos directory and run git diff
+  cd /home/daytonn/Development/nixos
+  
+  echo "Running git diff to show changes..."
+  git diff
+  
+  # Prompt for confirmation
+  echo -n "Are you sure? (yes/no): "
+  read -r confirmation
+  
+  if [[ "$confirmation" = "yes" ]]; then
+    # Ask about commit message preference
+    echo -n "Would you like to add a custom commit message? (yes/no): "
+    read -r custom_message
+    
+    if [[ "$custom_message" = "yes" ]]; then
+      echo -n "Enter your custom commit message: "
+      read -r commit_msg
+      echo "Custom commit message: $commit_msg"
+      commit_message="$commit_msg"
+    else
+      echo "Using auto-generated commit message"
+      commit_message="Configuration updates"
+    fi
+    
+    echo "committing configuration"
+    
+    # Perform git operations
+    git add .
+    git commit -m "$commit_message"
+    
+    echo "Pushing changes to remote repository..."
+    git push origin main:main
+    
+    echo "Configuration committed and pushed successfully!"
+  else
+    echo "Operation cancelled"
+    exit 0
+  fi
+}
+
+function status {
+  local config_file="/etc/nixos/configuration.nix"
+  local dev_config_file="/home/daytonn/Development/nixos/configuration.nix"
+  
+  # Check if both files exist
+  if [[ ! -f "$config_file" ]]; then
+    echo "Error: Configuration file not found at $config_file"
+    exit 1
+  fi
+  
+  if [[ ! -f "$dev_config_file" ]]; then
+    echo "Error: Development configuration file not found at $dev_config_file"
+    exit 1
+  fi
+  
+  echo "Showing diff between current configuration and git-tracked version..."
+  echo "Changes in /etc/nixos/configuration.nix (shown as additions):"
+  echo ""
+  
+  # Use colored diff if available, otherwise use git diff for colors
+  if command -v colordiff >/dev/null 2>&1; then
+    # Use colordiff if installed
+    colordiff -u "$dev_config_file" "$config_file" || true
+  elif command -v git >/dev/null 2>&1; then
+    # Use git diff for colored output
+    git diff --no-index --color=always "$dev_config_file" "$config_file" || true
+  else
+    # Fallback to regular diff
+    diff -u "$dev_config_file" "$config_file" || true
+  fi
+  
+  echo ""
+  echo "Note: Changes shown above are what would be committed if you run 'nx save'"
+}
+
+function install {
+  if [[ $# -eq 0 ]]; then
+    echo "Error: No packages specified. Usage: nx install <package1> [package2] ..."
+    exit 1
+  fi
+  
+  echo "Installing packages: $*"
+  
+  # First add the packages to the configuration
+  add "$@"
+  
+  if [[ $? -eq 0 ]]; then
+    echo ""
+    echo "Packages added successfully. Now rebuilding and switching to new configuration..."
+    echo "This may take a few minutes..."
+    
+    # Call rebuild_switch to install the packages
+    rebuild_switch
+  else
+    echo "Error: Failed to add packages. Aborting installation."
+    exit 1
+  fi
+}
+
+function remove {
+  if [[ $# -eq 0 ]]; then
+    echo "Error: No package specified. Usage: nx remove <package-name>"
+    exit 1
+  fi
+  
+  if [[ $# -gt 1 ]]; then
+    echo "Error: Can only remove one package at a time. Usage: nx remove <package-name>"
+    exit 1
+  fi
+  
+  local package_to_remove="$1"
+  local config_file="/etc/nixos/configuration.nix"
+  local temp_file="/tmp/configuration.nix.tmp"
+  
+  echo "Removing package: $package_to_remove"
+  
+  # Check if configuration file exists
+  if [[ ! -f "$config_file" ]]; then
+    echo "Error: Configuration file not found at $config_file"
+    exit 1
+  fi
+  
+  # Read the configuration file and process it
+  local in_packages_section=false
+  local packages_start_line=0
+  local packages_end_line=0
+  local line_num=0
+  
+  # First pass: find the packages section boundaries
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    # Look for the start of packages section (simplified pattern)
+    if [[ "$line" =~ ^[[:space:]]*packages[[:space:]]*=[[:space:]]*with[[:space:]]*pkgs ]]; then
+      in_packages_section=true
+      packages_start_line=$line_num
+    fi
+    
+    # Look for the end of packages section (closing bracket)
+    if [[ "$in_packages_section" == true && "$line" =~ ^[[:space:]]*\] ]]; then
+      packages_end_line=$line_num
+      break
+    fi
+  done < "$config_file"
+  
+  if [[ $packages_start_line -eq 0 ]]; then
+    echo "Error: Could not find packages section in configuration.nix"
+    exit 1
+  fi
+  
+  # Extract existing packages
+  local existing_packages=()
+  local line_num=0
+  local package_found=false
+  
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    if [[ $line_num -gt $packages_start_line && $line_num -lt $packages_end_line ]]; then
+      # Extract package names from lines like "    gnome-boxes" or "    gnomeExtensions.auto-move-windows # comment"
+      if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_.-]+) ]]; then
+        local package_name="${BASH_REMATCH[1]}"
+        
+        # Check if this is the package to remove
+        if [[ "$package_name" == "$package_to_remove" ]]; then
+          package_found=true
+          echo "Found package: $package_name"
+        else
+          existing_packages+=("$package_name")
+        fi
+      fi
+    fi
+  done < "$config_file"
+  
+  if [[ "$package_found" == false ]]; then
+    echo "Error: Package '$package_to_remove' not found in configuration"
+    exit 1
+  fi
+  
+  echo "Removing package '$package_to_remove' from configuration..."
+  
+  # Sort remaining packages alphabetically
+  IFS=$'\n' sorted_packages=($(sort <<<"${existing_packages[*]}"))
+  unset IFS
+  
+  # Create updated configuration
+  local line_num=0
+  local in_packages_section=false
+  
+  while IFS= read -r line; do
+    ((line_num++))
+    
+    if [[ $line_num -eq $packages_start_line ]]; then
+      # Write the packages section start
+      echo "$line" >> "$temp_file"
+      
+      # Write all remaining packages
+      for package in "${sorted_packages[@]}"; do
+        echo "    $package" >> "$temp_file"
+      done
+      
+      in_packages_section=true
+    elif [[ $line_num -gt $packages_start_line && $line_num -lt $packages_end_line ]]; then
+      # Skip lines in the packages section (we've already written them)
+      continue
+    elif [[ $line_num -eq $packages_end_line ]]; then
+      # Write the packages section end
+      echo "$line" >> "$temp_file"
+      in_packages_section=false
+    else
+      # Write all other lines unchanged
+      echo "$line" >> "$temp_file"
+    fi
+  done < "$config_file"
+  
+  # Backup original configuration
+  local backup_file="/etc/nixos/configuration.nix.backup.$(date +%Y%m%d_%H%M%S)"
+  if sudo cp "$config_file" "$backup_file"; then
+    echo "Backup created"
+  else
+    echo "Warning: Failed to create backup"
+  fi
+  
+  # Replace original with updated configuration
+  if sudo cp "$temp_file" "$config_file"; then
+    echo "Package '$package_to_remove' removed successfully!"
+    echo "Configuration updated. Run 'nx rs' to rebuild and switch"
+  else
+    echo "Error: Failed to update configuration file"
+    exit 1
+  fi
+  
+  # Clean up temp file
+  rm -f "$temp_file"
+}
+
+function help {
+  echo "NixOS Configuration Management Tool"
+  echo ""
+  echo "Usage: nx <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  add <package1> [package2] ...  Add packages to configuration.nix and sort them"
+  echo "  install <package1> [package2]  Add packages and immediately rebuild/switch"
+  echo "  remove <package-name>           Remove a single package from configuration.nix"
+  echo "  edit                            Open configuration.nix in Sublime Text"
+  echo "  rs                              Rebuild and switch to new configuration"
+  echo "  save                            Save and commit configuration changes to git"
+  echo "  status, st                      Show diff between current and git-tracked config"
+  echo "  help                            Show this help message"
+  echo ""
+  echo "Examples:"
+  echo "  nx add gnome-boxes             Add gnome-boxes to packages list"
+  echo "  nx add firefox vscode          Add multiple packages at once"
+  echo "  nx install gnome-boxes         Add and immediately install gnome-boxes"
+  echo "  nx install firefox vscode      Add and immediately install multiple packages"
+  echo "  nx remove gnome-boxes          Remove gnome-boxes from packages list"
+  echo "  nx edit                        Edit configuration.nix"
+  echo "  nx rs                          Rebuild and switch"
+}
+
+cmd="$1"
+
+if [[ -n "$cmd" ]]; then
+  if [[ "$cmd" = "save" ]]; then
+    save
+  fi
+
+  if [[ "$cmd" = "rs" ]]; then
+    rebuild_switch
+  fi
+
+  if [[ "$cmd" = "edit" ]]; then
+    edit
+  fi
+
+  if [[ "$cmd" = "add" ]]; then
+    shift # Remove the command name
+    add "$@"
+  fi
+
+  if [[ "$cmd" = "install" ]]; then
+    shift # Remove the command name
+    install "$@"
+  fi
+
+  if [[ "$cmd" = "remove" ]]; then
+    shift # Remove the command name
+    remove "$@"
+  fi
+
+  if [[ "$cmd" = "status" ]] || [[ "$cmd" = "st" ]]; then
+    status
+  fi
+else
+  help
+fi
