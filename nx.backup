@@ -570,29 +570,6 @@ function clean {
   echo "Cleanup completed! Deleted $deleted_count backup file(s)."
 }
 
-function restore {
-  local dev_config_file="/home/daytonn/Development/nixos/configuration.nix"
-  local system_config_file="/etc/nixos/configuration.nix"
-  
-  echo "This will replace /etc/nixos/configuration.nix with the version from git repository."
-  echo -n "Are you sure? (yes/no): "
-  read -r confirmation
-  
-  if [[ "$confirmation" != "yes" ]]; then
-    echo "Operation cancelled."
-    exit 0
-  fi
-  
-  if sudo cp "$dev_config_file" "$system_config_file"; then
-    echo "Configuration restored successfully!"
-    echo "Running 'nx rs' to rebuild and switch..."
-    rebuild_switch
-  else
-    echo "Error: Failed to restore configuration file"
-    exit 1
-  fi
-}
-
 function help {
   echo "NixOS Configuration Management Tool"
   echo ""
@@ -603,8 +580,6 @@ function help {
   echo "  install <package1> [package2]  Add packages and immediately rebuild/switch"
   echo "  remove <package-name>           Remove a single package from configuration.nix"
   echo "  clean [-f]                      Remove all configuration backup files (-f skips confirmation)"
-
-  echo "  restore                          Restore configuration from git repository and rebuild"
   echo "  edit                            Open configuration.nix in Sublime Text"
   echo "  rs                              Rebuild and switch to new configuration"
   echo "  save                            Save and commit configuration changes to git"
@@ -657,10 +632,6 @@ if [[ -n "$cmd" ]]; then
 
   if [[ "$cmd" = "clean" ]]; then
     clean
-  fi
-
-  if [[ "$cmd" = "restore" ]]; then
-    restore
   fi
 
   if [[ "$cmd" = "status" ]] || [[ "$cmd" = "st" ]]; then

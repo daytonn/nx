@@ -49,10 +49,13 @@ nx <command> [options]
 Add one or more packages to your `packages` list in `configuration.nix`. Packages are automatically sorted alphabetically.
 
 ```bash
-# Add a single package
+# Add a single package to user packages
 nx add gnome-boxes
 
-# Add multiple packages at once
+# Add packages to system packages (environment.systemPackages)
+nx add --system vim wget git
+
+# Add multiple packages at once to user packages
 nx add firefox vscode thunderbird
 
 # Add packages with dots (nested packages)
@@ -61,11 +64,20 @@ nx add texlivePackages.rpgicons
 ```
 
 **What it does:**
-- Locates the `packages = with pkgs; [ ... ]` section
+- Locates the appropriate packages section:
+  - **User packages**: `users.users.[username].packages = with pkgs; [ ... ]` (automatically detects username)
+  - **System packages**: `environment.systemPackages = with pkgs; [ ... ]` (when using `--system` flag)
 - Adds new packages (avoiding duplicates)
 - Sorts all packages alphabetically
 - Creates a backup before making changes
 - Updates the configuration file
+
+**Options:**
+- **`--system`** - Add packages to `environment.systemPackages` instead of user packages
+
+**Note:** The tool automatically detects the username from your `configuration.nix` file, so it works for any user without modification.
+
+**Important:** The `--system` flag must come before the package names (e.g., `nx add --system package-name`, not `nx add package-name --system`).
 
 ### `install` - Add and Immediately Install Packages
 Combines `add` functionality with immediate system rebuild. Perfect for when you want packages available right away.
@@ -99,6 +111,28 @@ nx remove gnomeExtensions.auto-move-windows
 - Resorts remaining packages alphabetically
 - Creates a backup before making changes
 - Updates the configuration file
+
+### `clean` - Remove Configuration Backup Files
+Remove all configuration backup files created by the tool. Useful for system maintenance and disk space management.
+
+```bash
+# Interactive mode (requires confirmation)
+nx clean
+
+# Force mode (skips confirmation)
+nx clean -f
+nx clean --force
+```
+
+**What it does:**
+- Finds all backup files matching `configuration.nix.backup.*`
+- Lists files that will be deleted
+- Requires user confirmation before proceeding (unless `-f` flag is used)
+- Safely removes backup files with sudo permissions
+- Reports deletion results
+
+**Options:**
+- **`-f, --force`** - Skip confirmation prompt and delete all backup files immediately
 
 ### `edit` - Edit Configuration File
 Open your `configuration.nix` file in Sublime Text for manual editing.
@@ -135,6 +169,7 @@ nx save
 - Prompts for confirmation
 - Offers custom commit message option
 - Commits and pushes to remote repository
+- **Automatically cleans up backup files** after successful commit
 
 ### `status` / `st` - Show Configuration Changes
 Display a diff between your current configuration and the git-tracked version.
@@ -197,7 +232,7 @@ nx edit
 # Rebuild after manual changes
 nx rs
 
-# Save changes to git
+# Save changes to git (automatically cleans up backups)
 nx save
 ```
 
@@ -216,11 +251,27 @@ nx install thunderbird
 # 4. Remove unwanted packages
 nx remove old-package
 
-# 5. Save all changes to git
+# 5. Save all changes to git (automatically cleans up backups)
 nx save
 
 # 6. Rebuild if needed
 nx rs
+```
+
+### System Maintenance Workflow
+
+```bash
+# 1. Check current status
+nx status
+
+# 2. Clean up old backup files
+nx clean
+
+# 3. Verify system is working correctly
+nx rs
+
+# 4. Save any remaining changes (automatically cleans up backups)
+nx save
 ```
 
 ## File Structure
@@ -235,6 +286,7 @@ The tool works with these key files:
 ## Safety Features
 
 - **Automatic Backups**: Creates timestamped backups before any changes
+- **Automatic Cleanup**: Removes backup files after successful git commits
 - **Duplicate Prevention**: Won't add packages that already exist
 - **Error Handling**: Comprehensive error checking and user feedback
 - **Safe File Operations**: Uses temporary files and sudo permissions appropriately
